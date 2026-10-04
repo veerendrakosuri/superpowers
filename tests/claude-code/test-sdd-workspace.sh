@@ -140,6 +140,98 @@ PLAN
         echo "    got: $brief_path"
     fi
 
+    # --- task numbers are literal identifiers, not regexes or prefixes (#2405) ---
+    cat > "$repo/numbered-plan.md" <<'PLAN'
+## Task 1.1: Alpha
+Alpha requirements.
+## Task 1.2: Beta
+Beta requirements.
+## Task 2.1: Gamma
+Gamma requirements.
+## Task 201: Decoy
+Decoy requirements.
+## Task 2.10: Delta
+Delta requirements.
+## Task 01: Leading zero
+Leading-zero requirements.
+## Task 1: Integer
+Integer requirements.
+```markdown
+## Task 2.1: Fenced example
+```
+## Task 10: Ten
+Ten requirements.
+## Task 6b: Letter suffix
+Letter-suffix requirements.
+PLAN
+    local number expected actual
+    for number in 1.1 1.2 2.1 201 2.10 01 1 10 6b; do
+        case "$number" in
+            1.1) expected=$'## Task 1.1: Alpha\nAlpha requirements.' ;;
+            1.2) expected=$'## Task 1.2: Beta\nBeta requirements.' ;;
+            2.1) expected=$'## Task 2.1: Gamma\nGamma requirements.' ;;
+            201) expected=$'## Task 201: Decoy\nDecoy requirements.' ;;
+            2.10) expected=$'## Task 2.10: Delta\nDelta requirements.' ;;
+            01) expected=$'## Task 01: Leading zero\nLeading-zero requirements.' ;;
+            1) expected=$'## Task 1: Integer\nInteger requirements.\n```markdown\n## Task 2.1: Fenced example\n```' ;;
+            10) expected=$'## Task 10: Ten\nTen requirements.' ;;
+            6b) expected=$'## Task 6b: Letter suffix\nLetter-suffix requirements.' ;;
+        esac
+        rc=0
+        "$SDD_SCRIPTS/task-brief" "$repo/numbered-plan.md" "$number" "$TEST_ROOT/numbered-brief.md" >/dev/null 2>&1 || rc=$?
+        actual="$(cat "$TEST_ROOT/numbered-brief.md")"
+        if [[ "$rc" -eq 0 && "$actual" == "$expected" ]]; then
+            pass "task-brief extracts exactly Task $number"
+        else
+            fail "task-brief extracts exactly Task $number (got exit $rc)"
+            echo "    got: $actual"
+        fi
+    done
+
+    # Without an exact parent, suggest its dotted children rather than dispatching them.
+    printf '## Task 3.1: Child\nChild requirements.\n## Task 3.2: Other\nOther requirements.\n' > "$repo/children.md"
+    rc=0
+    local number_err
+    number_err="$("$SDD_SCRIPTS/task-brief" "$repo/children.md" 3 "$TEST_ROOT/numbered-brief.md" 2>&1)" || rc=$?
+    if [[ "$rc" -eq 3 && ! -s "$TEST_ROOT/numbered-brief.md" \
+        && "$number_err" == *"3.1, 3.2"* ]]; then
+        pass "a missing parent fails with exit 3 and suggests dotted children"
+    else
+        fail "a missing parent fails with exit 3 and suggests dotted children (got exit $rc)"
+        echo "    output: $number_err"
+    fi
+
+    rc=0
+    "$SDD_SCRIPTS/task-brief" "$repo/numbered-plan.md" 99 "$TEST_ROOT/numbered-brief.md" >/dev/null 2>&1 || rc=$?
+    if [[ "$rc" -eq 3 && ! -s "$TEST_ROOT/numbered-brief.md" ]]; then
+        pass "an absent task still fails with exit 3 and no brief"
+    else
+        fail "an absent task still fails with exit 3 and no brief (got exit $rc)"
+    fi
+
+    printf '### Task 2.1.3\r\nNested requirements.\r\n### Task 2.1.30\r\nDecoy.\r\n' > "$repo/crlf-plan.md"
+    rc=0
+    "$SDD_SCRIPTS/task-brief" "$repo/crlf-plan.md" 2.1.3 "$TEST_ROOT/numbered-brief.md" >/dev/null 2>&1 || rc=$?
+    actual="$(tr -d '\r' < "$TEST_ROOT/numbered-brief.md")"
+    if [[ "$rc" -eq 0 && "$actual" == $'### Task 2.1.3\nNested requirements.' ]]; then
+        pass "nested task numbers without a colon work in CRLF plans"
+    else
+        fail "nested task numbers without a colon work in CRLF plans (got exit $rc)"
+    fi
+
+    # Validation must precede output truncation.
+    for number in '2|3' '2(' '2.*' '' '../2' '2..1'; do
+        printf 'keep existing brief\n' > "$TEST_ROOT/numbered-brief.md"
+        rc=0
+        number_err="$("$SDD_SCRIPTS/task-brief" "$repo/numbered-plan.md" "$number" "$TEST_ROOT/numbered-brief.md" 2>&1)" || rc=$?
+        if [[ "$rc" -eq 2 && "$number_err" == *"invalid task number"* \
+            && "$(cat "$TEST_ROOT/numbered-brief.md")" == 'keep existing brief' ]]; then
+            pass "invalid task number '$number' is rejected without overwriting a brief"
+        else
+            fail "invalid task number '$number' is rejected without overwriting a brief (got exit $rc)"
+        fi
+    done
+
     # --- review-package takes the plan first and lands in its directory ---
     local git_id=(-c user.email=t@example.com -c user.name=t -c commit.gpgsign=false)
     ( cd "$repo" \

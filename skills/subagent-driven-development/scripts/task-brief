@@ -17,6 +17,11 @@ fi
 plan=$1
 n=$2
 [ -f "$plan" ] || { echo "no such plan file: $plan" >&2; exit 2; }
+# Keep letter-suffixed task IDs working alongside dotted task numbers.
+if [[ ! "$n" =~ ^[0-9]+(\.[0-9]+)*[A-Za-z]*$ ]]; then
+  echo "invalid task number: $n (expected digits, optional dotted digits and letter suffix)" >&2
+  exit 2
+fi
 
 if [ $# -eq 3 ]; then
   out=$3
@@ -30,14 +35,25 @@ fi
 awk -v n="$n" '
   /^```/ { infence = !infence }
   !infence && /^#+[ \t]+Task[ \t]+[0-9]+/ {
-    intask = ($0 ~ ("^#+[ \t]+Task[ \t]+" n "([^0-9]|$)"))
+    task = $0
+    sub(/^#+[ \t]+Task[ \t]+/, "", task)
+    sub(/[:[:space:]].*$/, "", task)
+    # Prefix both operands so awk compares strings (2.1 != 2.10, 1 != 01).
+    intask = ("Task " task == "Task " n)
+    if (intask) found = 1
+    if (index(task, n ".") == 1) {
+      candidates = candidates (candidates == "" ? "" : ", ") task
+    }
   }
   intask { print }
+  END {
+    if (!found) {
+      message = "task " n " not found in " FILENAME
+      if (candidates != "") message = message "; did you mean " candidates "?"
+      print message > "/dev/stderr"
+      exit 3
+    }
+  }
 ' "$plan" > "$out"
-
-if [ ! -s "$out" ]; then
-  echo "task ${n} not found in ${plan} (no heading matching 'Task ${n}')" >&2
-  exit 3
-fi
 
 echo "wrote ${out}: $(wc -l < "$out" | tr -d ' ') lines"
